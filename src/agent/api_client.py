@@ -52,7 +52,7 @@ class APIClient:
     """HTTP client for the Agent chat API with retry, timeout, and streaming."""
 
     MAX_RETRIES = 3
-    TIMEOUT = 30
+    TIMEOUT = 300
 
     def __init__(self, base_url: str, api_key: str, model: str = "deepseek-chat") -> None:
         self.base_url = base_url.rstrip("/")
@@ -179,6 +179,7 @@ class APIClient:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
+            "max_tokens": 384000,
         }
         if tools:
             payload["tools"] = tools

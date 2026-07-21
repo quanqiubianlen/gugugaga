@@ -3,11 +3,14 @@
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QElapsedTimer, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QCloseEvent, QFont, QKeyEvent, QResizeEvent
+from PyQt6.QtCore import (
+    QEasingCurve, QElapsedTimer, QPropertyAnimation, Qt, QThread, QTimer, pyqtSignal,
+)
+from PyQt6.QtGui import QAction, QCloseEvent, QFont, QFontMetrics, QKeyEvent, QPixmap, QResizeEvent
 from src.utils.tools import TOOLS
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QGraphicsOpacityEffect,
     QMenu,
     QApplication,
     QFrame,
@@ -40,6 +43,13 @@ def _build_code_css() -> str:
         from pygments.formatters import HtmlFormatter
         _CODE_CSS = HtmlFormatter(style="monokai").get_style_defs(".codehilite")
         _CODE_CSS = _CODE_CSS.replace(".codehilite", ".bubble-content .codehilite")
+        _CODE_CSS += """
+            .bubble-content .codehilite {
+                background: rgba(0, 0, 0, 0.25) !important;
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """
     except Exception:
         _CODE_CSS = ""
     return _CODE_CSS
@@ -100,26 +110,69 @@ class MessageBubble(QFrame):
         self._timestamp = timestamp or datetime.now()
 
         self.setObjectName("messageBubble")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
 
         copy_action = QAction("Copy", self)
         copy_action.triggered.connect(self._copy_content)
         self.addAction(copy_action)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        is_user = role == "user"
 
-        bubble = QFrame(self)
-        bubble.setObjectName("bubble")
-        bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 8, 12, 8)
-        bubble_layout.setSpacing(4)
+        # --- Avatar with circular background ---
+        avatar_bg = "#4a3068" if is_user else "#1a3c5e"
+        self._avatar = QLabel()
+        self._avatar.setFixedSize(32, 32)
+        self._avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._avatar.setStyleSheet(
+            f"background: {avatar_bg}; border-radius: 16px;"
+        )
+        if role == "agent":
+            # Load pet image as AI avatar (find by glob to avoid encoding issues)
+            pet_dir = Path(__file__).resolve().parent.parent / "assets" / "pet"
+            candidates = list(pet_dir.glob("*.png"))
+            # Pick the main pet image (largest file, usually the main character)
+            pet_img = max(candidates, key=lambda p: p.stat().st_size) if candidates else None
+            if pet_img and pet_img.exists():
+                pix = QPixmap(str(pet_img)).scaled(
+                    30, 30, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+                self._avatar.setPixmap(pix)
+            else:
+                self._avatar.setText(chr(0x1F427))
+        else:
+            self._avatar.setText(chr(0x1F464))
+            self._avatar.setStyleSheet(
+                f"background: {avatar_bg}; border-radius: 16px; font-size: 17px;"
+            )
+
+        # --- Inner bubble frame: richer colours + chat-tail shape ---
+        self._bubble_frame = QFrame(self)
+        self._bubble_frame.setObjectName("bubble")
+        self._bubble_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        bubble_color = "#5b3a78" if is_user else "#142c4a"
+        border_color = "#7a55a0" if is_user else "#2a62a0"
+        # AI: small bottom-left corner  (16 16 16 4)
+        # User: small bottom-right corner (16 16 4 16)
+        corners = "16px 16px 4px 16px" if is_user else "16px 16px 16px 4px"
+        self._bubble_frame.setStyleSheet(
+            f"#bubble {{"
+            f"  border-radius: {corners};"
+            f"  background: {bubble_color};"
+            f"  border: 1px solid {border_color};"
+            f"}}"
+        )
+
+        bubble_layout = QVBoxLayout(self._bubble_frame)
+        bubble_layout.setContentsMargins(15, 10, 15, 10)
+        bubble_layout.setSpacing(6)
 
         self._content_label = QLabel(_render_markdown(content))
         self._content_label.setObjectName("bubbleLabel")
         self._content_label.setWordWrap(True)
+        self._content_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        # Natural min-width from content (no forced zero)
+        self._content_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._content_label.setTextFormat(Qt.TextFormat.RichText)
         self._content_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
@@ -129,29 +182,76 @@ class MessageBubble(QFrame):
 
         self._time_label = QLabel(_relative_time(self._timestamp))
         self._time_label.setObjectName("bubbleTime")
+        self._time_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        # Natural min-width from content
+        self._time_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._time_label.setToolTip(self._timestamp.strftime("%Y-%m-%d %H:%M:%S"))
-        bubble_layout.addWidget(self._time_label, alignment=Qt.AlignmentFlag.AlignRight)
+        bubble_layout.addWidget(self._time_label, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
-        outer = QHBoxLayout()
-        outer.setContentsMargins(0, 2, 0, 2)
+        # --- Outer layout: avatar + bubble, flush to screen edge ---
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 4)
+        outer.setSpacing(6)
 
-        if role == "user":
-            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
+        if is_user:
+            # User: bubble then avatar, no stretch (alignment from parent)
+            outer.addWidget(self._bubble_frame)
+            outer.addWidget(self._avatar)
         else:
-            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+            # AI: avatar then bubble, no stretch (alignment from parent)
+            outer.addWidget(self._avatar)
+            outer.addWidget(self._bubble_frame)
 
-        layout.addLayout(outer)
+        # --- Fade-in animation (applied to bubble frame only, not parent) ---
+        self._fade_effect = QGraphicsOpacityEffect(self._bubble_frame)
+        self._fade_effect.setOpacity(0.0)
+        self._bubble_frame.setGraphicsEffect(self._fade_effect)
+        self._fade_anim = QPropertyAnimation(self._fade_effect, b"opacity", self)
+        self._fade_anim.setDuration(280)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.finished.connect(self._on_fade_done)
 
     def _copy_content(self) -> None:
         QApplication.clipboard().setText(self._content)
 
     @staticmethod
     def bubble_stylesheet() -> str:
+        """Shared stylesheet (role-specific colours are set inline per bubble)."""
         return """
-            #bubble { border-radius: 12px; background: #313244; }
-            #bubbleLabel { font-size: 13px; line-height: 1.5; color: #cdd6f4; background: transparent; }
-            #bubbleTime { font-size: 10px; color: #888; }
+            #bubbleLabel {
+                font-size: 13px; line-height: 1.55; color: #e2e2f0; background: transparent;
+            }
+            #bubbleTime { font-size: 10px; color: #889; margin-top: 2px; }
         """
+
+    def set_bubble_max_width(self, max_width: int) -> None:
+        """Cap max width (used by streaming); for final sizing use fit_bubble_to_content."""
+        if self._bubble_frame:
+            self._bubble_frame.setMaximumWidth(max_width)
+
+    def fit_bubble_to_content(self, max_width: int) -> None:
+        """Measure plain-text width and lock bubble to min(ideal, max_width)."""
+        if not self._bubble_frame:
+            return
+        fm = QFontMetrics(self._content_label.font())
+        lines = (self._content or "").split(chr(10))
+        widest = max((fm.horizontalAdvance(line) for line in lines), default=0)
+        ideal_w = int(widest) + 50
+        final_w = max(60, min(ideal_w, max_width))
+        self._bubble_frame.setFixedWidth(final_w)
+
+
+    def start_fade_in(self) -> None:
+        """Trigger the entrance fade-in animation."""
+        if hasattr(self, "_fade_anim") and self._fade_anim:
+            self._fade_anim.start()
+
+    def _on_fade_done(self) -> None:
+        """Remove the graphics effect after fade-in so layout shifts render in real-time."""
+        if self._bubble_frame:
+            self._bubble_frame.setGraphicsEffect(None)
 
 
 # ---------------------------------------------------------------------------
@@ -168,24 +268,17 @@ class ErrorBubble(MessageBubble):
         icon = icons.get(category, "[!]")
         super().__init__("agent", f"**{icon}  {error_msg}**")
 
-        # Find the bubble frame and add a retry button
-        for i in range(self.layout().count()):
-            item = self.layout().itemAt(i)
-            if item and item.layout():
-                inner = item.layout()
-                for j in range(inner.count()):
-                    w = inner.itemAt(j)
-                    if w and w.widget() and w.widget().objectName() == "bubble":
-                        retry_btn = QPushButton("Retry")
-                        retry_btn.setStyleSheet("""
-                            QPushButton {
-                                background: #E74C3C; color: white; border: none;
-                                border-radius: 4px; padding: 4px 16px; font-size: 11px;
-                            }
-                            QPushButton:hover { background: #C0392B; }
-                        """)
-                        retry_btn.clicked.connect(self.retry_requested.emit)
-                        w.widget().layout().addWidget(retry_btn)
+        # Add retry button directly to the bubble frame
+        retry_btn = QPushButton("Retry")
+        retry_btn.setStyleSheet("""
+            QPushButton {
+                background: #E74C3C; color: white; border: none;
+                border-radius: 4px; padding: 4px 16px; font-size: 11px;
+            }
+            QPushButton:hover { background: #C0392B; }
+        """)
+        retry_btn.clicked.connect(self.retry_requested.emit)
+        self._bubble_frame.layout().addWidget(retry_btn)
 
 
 # ---------------------------------------------------------------------------
@@ -461,8 +554,10 @@ class MainWindow(QMainWindow):
         self._msg_layout = QVBoxLayout(self._msg_container)
         self._msg_layout.setContentsMargins(0, 8, 0, 8)
         self._msg_layout.setSpacing(4)
-        self._msg_layout.addStretch()
+        self._msg_layout.insertStretch(0, 1)
         self._scroll.setWidget(self._msg_container)
+        self._scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
+        self._scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value)
 
         # Input bar
         input_panel = QWidget()
@@ -500,6 +595,7 @@ class MainWindow(QMainWindow):
         self._worker: ApiWorker | None = None
         self._last_message: str = ""  # for retry
         self._stream_first_token = False
+        self._at_bottom = True
 
         self.setStyleSheet(MessageBubble.bubble_stylesheet())
 
@@ -631,10 +727,12 @@ class MainWindow(QMainWindow):
         self._streaming_worker.stream_error.connect(self._on_stream_error)
         self._remove_stretch()
         self._streaming_bubble = MessageBubble("agent", "")
-        cw2 = self._msg_container.width()
+        cw2 = self._scroll.width()
         if cw2 > 100:
-            self._streaming_bubble.setMaximumWidth(int(cw2 * 0.90))
-        self._msg_layout.addWidget(self._streaming_bubble)
+            w90 = int(cw2 * 0.90)
+            self._streaming_bubble.set_bubble_max_width(w90)
+        self._msg_layout.addWidget(self._streaming_bubble, 0, Qt.AlignmentFlag.AlignLeft)
+        self._streaming_bubble.start_fade_in()
         self._add_stretch()
         self._scroll_to_bottom()
         self._cursor_timer = QTimer(self)
@@ -648,6 +746,12 @@ class MainWindow(QMainWindow):
         self._streaming_worker.start()
 
     def _on_stream_token(self, event) -> None:
+        try:
+            self._handle_stream_event(event)
+        except Exception:
+            pass
+
+    def _handle_stream_event(self, event) -> None:
         if self._streaming_bubble is None:
             return
 
@@ -663,14 +767,12 @@ class MainWindow(QMainWindow):
                 self._streaming_bubble._content_label.setText(
                     _render_markdown(self._streaming_bubble._content + " ▌")
                 )
-                self._scroll_to_bottom()
             elif etype == "tool_start":
                 name = event.get("name", "?")
                 self._streaming_bubble._content += "\n\n> Running: `" + name + "`...\n"
                 self._streaming_bubble._content_label.setText(
                     _render_markdown(self._streaming_bubble._content + " ▌")
                 )
-                self._scroll_to_bottom()
             elif etype == "tool_result":
                 name = event.get("name", "?")
                 result = event.get("result", "")
@@ -681,7 +783,6 @@ class MainWindow(QMainWindow):
                 self._streaming_bubble._content_label.setText(
                     _render_markdown(self._streaming_bubble._content + " ▌")
                 )
-                self._scroll_to_bottom()
         elif isinstance(event, str):
             # Backward compat: plain string tokens
             if self._stream_first_token:
@@ -699,6 +800,10 @@ class MainWindow(QMainWindow):
             self._streaming_bubble._content_label.setText(
                 _render_markdown(self._streaming_bubble._content)
             )
+            # Lock final width after streaming finishes
+            cw4 = self._scroll.width()
+            if cw4 > 100:
+                self._streaming_bubble.fit_bubble_to_content(int(cw4 * 0.90))
             self._streaming_bubble._time_label.setText(
                 _relative_time(self._streaming_bubble._timestamp) + f"  ({elapsed:.1f}s)"
             )
@@ -707,6 +812,7 @@ class MainWindow(QMainWindow):
         self._conv.save_active()
         self._refresh_sidebar()
         self.api_call_finished.emit(reply)
+        self._scroll_to_bottom()
 
     def _on_stream_error(self, error_msg: str, category: str) -> None:
         self._stop_cursor()
@@ -937,17 +1043,23 @@ class MainWindow(QMainWindow):
     def _add_bubble(self, role: str, content: str) -> None:
         self._remove_stretch()
         bubble = MessageBubble(role, content)
-        # Constrain bubble width to ~72% of container
-        cw = self._msg_container.width()
+        # Cap at 90% -- bubble shrinks to content via Maximum policy
+        cw = self._scroll.width()
         if cw > 100:
-            bubble.setMaximumWidth(int(cw * 0.90))
-        self._msg_layout.addWidget(bubble)
+            bubble.fit_bubble_to_content(int(cw * 0.90))
+        align = Qt.AlignmentFlag.AlignRight if role == "user" else Qt.AlignmentFlag.AlignLeft
+        self._msg_layout.addWidget(bubble, 0, align)
         self._add_stretch()
+        bubble.start_fade_in()
         self._scroll_to_bottom()
 
     def _add_error_bubble(self, bubble: ErrorBubble) -> None:
         self._remove_stretch()
-        self._msg_layout.addWidget(bubble)
+        cw = self._scroll.width()
+        if cw > 100:
+            bubble.fit_bubble_to_content(int(cw * 0.90))
+        self._msg_layout.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+        bubble.start_fade_in()
         self._add_stretch()
         self._scroll_to_bottom()
 
@@ -960,20 +1072,29 @@ class MainWindow(QMainWindow):
             item = self._msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self._msg_layout.addStretch()
+        self._msg_layout.insertStretch(0, 1)
 
     def _remove_stretch(self) -> None:
         if self._msg_layout.count() > 0:
-            item = self._msg_layout.itemAt(self._msg_layout.count() - 1)
+            item = self._msg_layout.itemAt(0)
             if item and item.spacerItem():
                 self._msg_layout.removeItem(item)
 
     def _add_stretch(self) -> None:
-        self._msg_layout.addStretch()
+        self._msg_layout.insertStretch(0, 1)
 
     def _scroll_to_bottom(self) -> None:
-        QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
-            self._scroll.verticalScrollBar().maximum()))
+        self._at_bottom = True
+        sb = self._scroll.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_range_changed(self, _min: int, _max: int) -> None:
+        if self._at_bottom:
+            self._scroll.verticalScrollBar().setValue(_max)
+
+    def _on_scroll_value(self, val: int) -> None:
+        sb = self._scroll.verticalScrollBar()
+        self._at_bottom = val >= sb.maximum() - 20
 
     def _toggle_pin(self, checked: bool) -> None:
         if checked:
@@ -1061,11 +1182,11 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent | None) -> None:
         super().resizeEvent(event)
-        # Update max width of all existing bubbles
-        cw = self._msg_container.width()
+        # Update max width of all existing messages
+        cw = self._scroll.width()
         if cw > 100:
             max_w = int(cw * 0.90)
             for i in range(self._msg_layout.count()):
                 widget = self._msg_layout.itemAt(i).widget()
                 if isinstance(widget, MessageBubble):
-                    widget.setMaximumWidth(max_w)
+                    widget.fit_bubble_to_content(max_w)
