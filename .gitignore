@@ -1,0 +1,17 @@
+﻿config.yaml
+conversations/
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.spec
+installer.iss
+build.bat
+build.sh
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
