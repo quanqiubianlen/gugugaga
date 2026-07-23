@@ -6,7 +6,7 @@ from pathlib import Path
 from PyQt6.QtCore import (
     QEasingCurve, QElapsedTimer, QPropertyAnimation, Qt, QThread, QTimer, pyqtSignal,
 )
-from PyQt6.QtGui import QAction, QCloseEvent, QFont, QFontMetrics, QKeyEvent, QPixmap, QResizeEvent
+from PyQt6.QtGui import QAction, QCloseEvent, QFont, QFontMetrics, QKeyEvent, QPainter, QPainterPath, QPixmap, QResizeEvent
 from src.utils.tools import TOOLS
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -127,9 +127,9 @@ class MessageBubble(QFrame):
         self._avatar.setStyleSheet(
             f"background: {avatar_bg}; border-radius: 16px;"
         )
-        if role == "agent":
+        pet_dir = Path(__file__).resolve().parent.parent / "assets" / "pet"
+        if role != "user":
             # Load pet image as AI avatar (find by glob to avoid encoding issues)
-            pet_dir = Path(__file__).resolve().parent.parent / "assets" / "pet"
             candidates = list(pet_dir.glob("*.png"))
             # Pick the main pet image (largest file, usually the main character)
             pet_img = max(candidates, key=lambda p: p.stat().st_size) if candidates else None
@@ -141,10 +141,27 @@ class MessageBubble(QFrame):
             else:
                 self._avatar.setText(chr(0x1F427))
         else:
-            self._avatar.setText(chr(0x1F464))
-            self._avatar.setStyleSheet(
-                f"background: {avatar_bg}; border-radius: 16px; font-size: 17px;"
-            )
+            # Load user avatar from pet folder
+            user_img = pet_dir / "本人.jpg"
+            if user_img.exists():
+                pix = QPixmap(str(user_img)).scaled(
+                    30, 30, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+                circular = QPixmap(30, 30)
+                circular.fill(Qt.GlobalColor.transparent)
+                p = QPainter(circular)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                clip = QPainterPath()
+                clip.addEllipse(0, 0, 30, 30)
+                p.setClipPath(clip)
+                p.drawPixmap(0, 0, pix)
+                p.end()
+                self._avatar.setPixmap(circular)
+            else:
+                self._avatar.setText(chr(0x1F464))
+                self._avatar.setStyleSheet(
+                    f"background: {avatar_bg}; border-radius: 16px; font-size: 17px;"
+                )
 
         # --- Inner bubble frame: richer colours + chat-tail shape ---
         self._bubble_frame = QFrame(self)

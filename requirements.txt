@@ -9,3 +9,6 @@ speechrecognition>=3.10
 pyttsx3>=2.90
 fpdf2>=2.7
 pyinstaller>=6.0
+beautifulsoup4>=4.12
+psutil>=5.9
+PyQt6-WebEngine>=6.6

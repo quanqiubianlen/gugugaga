@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>guga 3D</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script>
+initPet();
+</script>
+<script>
+function initPet() {
+  var THREE = window.THREE;
+
+  // qwebchannel bridge
+  var bridge = null;
+  if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+      bridge = channel.objects.bridge;
+    });
+  }
+
+  var container = document.body;
+  var scene = new THREE.Scene();
+
+  var camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+  camera.position.set(0, 0.05, 3.8);
+  camera.lookAt(0, -0.05, 0);
+
+  var renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x1a1a2e, 1);
+  container.appendChild(renderer.domElement);
+
+  // Soft lighting
+  var ambientLight = new THREE.AmbientLight(0x8899cc, 2.5);
+  scene.add(ambientLight);
+  var keyLight = new THREE.DirectionalLight(0xffffff, 3.5);
+  keyLight.position.set(3, 4, 5);
+  scene.add(keyLight);
+  var fillLight = new THREE.DirectionalLight(0x8899dd, 1.5);
+  fillLight.position.set(-2, 1, -1);
+  scene.add(fillLight);
+  var rimLight = new THREE.DirectionalLight(0xaaccff, 2.0);
+  rimLight.position.set(0, -1, 3);
+  scene.add(rimLight);
+
+  // Materials
+  var matBody = new THREE.MeshStandardMaterial({ color: 0x2a3a6e, roughness: 0.35, metalness: 0.05 });
+  var matBelly = new THREE.MeshStandardMaterial({ color: 0xf0f0f8, roughness: 0.3, metalness: 0.0 });
+  var matBeak = new THREE.MeshStandardMaterial({ color: 0xff8833, roughness: 0.25, metalness: 0.05 });
+  var matFeet = new THREE.MeshStandardMaterial({ color: 0xff8833, roughness: 0.3, metalness: 0.05 });
+  var matEyeWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.05 });
+  var matEyePupil = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.05 });
+  var matEyeHighlight = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  var matCheek = new THREE.MeshStandardMaterial({ color: 0xff9999, roughness: 0.2, transparent: true, opacity: 0.6 });
+  var matWing = new THREE.MeshStandardMaterial({ color: 0x1e2d55, roughness: 0.4, metalness: 0.05 });
+  var matScarf = new THREE.MeshStandardMaterial({ color: 0xe94560, roughness: 0.3, metalness: 0.1 });
+
+  // Penguin group
+  var penguin = new THREE.Group();
+  scene.add(penguin);
+
+  // Body (egg shape - two scaled spheres)
+  var bodyGroup = new THREE.Group();
+  var bodyUpper = new THREE.Mesh(new THREE.SphereGeometry(0.65, 48, 36), matBody);
+  bodyUpper.scale.set(1, 0.85, 0.85);
+  bodyUpper.position.y = -0.15;
+  bodyGroup.add(bodyUpper);
+  var bodyLower = new THREE.Mesh(new THREE.SphereGeometry(0.72, 48, 36), matBody);
+  bodyLower.scale.set(1, 0.95, 0.9);
+  bodyLower.position.y = -0.6;
+  bodyGroup.add(bodyLower);
+  penguin.add(bodyGroup);
+
+  // Belly
+  var belly = new THREE.Mesh(new THREE.SphereGeometry(0.5, 40, 30), matBelly);
+  belly.scale.set(0.7, 0.75, 0.4);
+  belly.position.set(0, -0.4, 0.45);
+  penguin.add(belly);
+
+  // Scarf
+  var scarfBase = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.08, 16, 32), matScarf);
+  scarfBase.position.y = 0.15;
+  scarfBase.rotation.x = Math.PI / 2;
+  penguin.add(scarfBase);
+  var scarfTail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.7, 0.04), matScarf);
+  scarfTail.position.set(0.45, -0.15, 0.1);
+  scarfTail.rotation.z = -0.3;
+  scarfTail.rotation.x = 0.2;
+  penguin.add(scarfTail);
+
+  // Head
+  var head = new THREE.Mesh(new THREE.SphereGeometry(0.58, 48, 36), matBody);
+  head.scale.set(1, 0.92, 0.95);
+  head.position.y = 0.5;
+  penguin.add(head);
+
+  // Eyes
+  var eyeGeo = new THREE.SphereGeometry(0.16, 24, 18);
+  var leftEye = new THREE.Mesh(eyeGeo, matEyeWhite);
+  leftEye.position.set(-0.18, 0.62, 0.52);
+  penguin.add(leftEye);
+  var rightEye = new THREE.Mesh(eyeGeo, matEyeWhite);
+  rightEye.position.set(0.18, 0.62, 0.52);
+  penguin.add(rightEye);
+
+  // Pupils
+  var pupilGeo = new THREE.SphereGeometry(0.09, 20, 14);
+  var leftPupil = new THREE.Mesh(pupilGeo, matEyePupil);
+  leftPupil.position.set(-0.18, 0.62, 0.67);
+  penguin.add(leftPupil);
+  var rightPupil = new THREE.Mesh(pupilGeo, matEyePupil);
+  rightPupil.position.set(0.18, 0.62, 0.67);
+  penguin.add(rightPupil);
+
+  // Eye highlights
+  var highlightGeo = new THREE.SphereGeometry(0.035, 12, 8);
+  var leftHL = new THREE.Mesh(highlightGeo, matEyeHighlight);
+  leftHL.position.set(-0.155, 0.655, 0.725);
+  penguin.add(leftHL);
+  var rightHL = new THREE.Mesh(highlightGeo, matEyeHighlight);
+  rightHL.position.set(0.205, 0.655, 0.725);
+  penguin.add(rightHL);
+
+  // Cheeks
+  var cheekGeo = new THREE.SphereGeometry(0.09, 16, 12);
+  var leftCheek = new THREE.Mesh(cheekGeo, matCheek);
+  leftCheek.scale.set(0.7, 0.5, 0.3);
+  leftCheek.position.set(-0.28, 0.48, 0.5);
+  penguin.add(leftCheek);
+  var rightCheek = new THREE.Mesh(cheekGeo, matCheek);
+  rightCheek.scale.set(0.7, 0.5, 0.3);
+  rightCheek.position.set(0.28, 0.48, 0.5);
+  penguin.add(rightCheek);
+
+  // Beak
+  var beakUpper = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.15, 16, 8), matBeak);
+  beakUpper.position.set(0, 0.51, 0.66);
+  beakUpper.rotation.x = -0.15;
+  penguin.add(beakUpper);
+  var beakLower = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.09, 16, 8), matBeak);
+  beakLower.position.set(0, 0.45, 0.64);
+  beakLower.rotation.x = 0.3;
+  penguin.add(beakLower);
+
+  // Wings
+  var wingGeo = new THREE.SphereGeometry(0.25, 20, 14);
+  var leftWing = new THREE.Mesh(wingGeo, matWing);
+  leftWing.scale.set(0.35, 0.7, 0.2);
+  leftWing.position.set(-0.68, 0.0, 0.0);
+  leftWing.rotation.z = 0.35;
+  penguin.add(leftWing);
+  var rightWing = new THREE.Mesh(wingGeo, matWing);
+  rightWing.scale.set(0.35, 0.7, 0.2);
+  rightWing.position.set(0.68, 0.0, 0.0);
+  rightWing.rotation.z = -0.35;
+  penguin.add(rightWing);
+
+  // Feet
+  var footGeo = new THREE.SphereGeometry(0.14, 16, 10);
+  var leftFoot = new THREE.Mesh(footGeo, matFeet);
+  leftFoot.scale.set(0.8, 0.25, 1.1);
+  leftFoot.position.set(-0.2, -1.05, 0.1);
+  penguin.add(leftFoot);
+  var rightFoot = new THREE.Mesh(footGeo, matFeet);
+  rightFoot.scale.set(0.8, 0.25, 1.1);
+  rightFoot.position.set(0.2, -1.05, 0.1);
+  penguin.add(rightFoot);
+
+  // State
+  var state = 'idle';
+  var mouseX = 0, mouseY = 0;
+  var targetMouseX = 0, targetMouseY = 0;
+
+  window.setPetState = function(s) { state = s; };
+  window.setBadgeCount = function(n) {};
+
+  document.addEventListener('mousemove', function(e) {
+    var rect = renderer.domElement.getBoundingClientRect();
+    targetMouseX = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
+    targetMouseY = -((e.clientY - rect.top) / rect.height - 0.5) * 2;
+  });
+
+  function resize() {
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / Math.max(h, 1);
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Animation loop
+  var clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.1);
+    var t = performance.now() * 0.001;
+
+    mouseX += (targetMouseX - mouseX) * 5 * dt;
+    mouseY += (targetMouseY - mouseY) * 5 * dt;
+
+    var pupilDX = mouseX * 0.04;
+    var pupilDY = mouseY * 0.03;
+    leftPupil.position.x = -0.18 + pupilDX;
+    leftPupil.position.y = 0.62 + pupilDY;
+    leftHL.position.x = -0.155 + pupilDX;
+    leftHL.position.y = 0.655 + pupilDY;
+    rightPupil.position.x = 0.18 + pupilDX;
+    rightPupil.position.y = 0.62 + pupilDY;
+    rightHL.position.x = 0.205 + pupilDX;
+    rightHL.position.y = 0.655 + pupilDY;
+
+    var bobAmp = 0.015, bobFreq = 2.5, wingFlap = 0;
+
+    if (state === 'sleeping') {
+      bobAmp = 0.008; bobFreq = 1.0;
+      head.rotation.z = Math.sin(t * 0.8) * 0.08;
+      leftEye.scale.y = 0.4 + Math.sin(t * 2) * 0.1;
+      rightEye.scale.y = 0.4 + Math.sin(t * 2) * 0.1;
+    } else if (state === 'excited') {
+      bobAmp = 0.04; bobFreq = 6.0;
+      wingFlap = Math.sin(t * 12) * 0.3;
+      penguin.rotation.z = Math.sin(t * 10) * 0.08;
+    } else if (state === 'thinking') {
+      bobAmp = 0.01; bobFreq = 1.8;
+      head.rotation.z = 0.15 + Math.sin(t * 3) * 0.05;
+      head.rotation.y = Math.sin(t * 2.5) * 0.1;
+    } else if (state === 'responding') {
+      bobAmp = 0.025; bobFreq = 3.5;
+      wingFlap = Math.sin(t * 8) * 0.15;
+      head.rotation.x = Math.sin(t * 4) * 0.08;
+    } else {
+      head.rotation.z += (0 - head.rotation.z) * 3 * dt;
+      head.rotation.y += (0 - head.rotation.y) * 3 * dt;
+      head.rotation.x += (0 - head.rotation.x) * 3 * dt;
+      leftEye.scale.y += (1 - leftEye.scale.y) * 3 * dt;
+      rightEye.scale.y += (1 - rightEye.scale.y) * 3 * dt;
+      penguin.rotation.z += (0 - penguin.rotation.z) * 3 * dt;
+    }
+
+    penguin.position.y = Math.sin(t * bobFreq) * bobAmp;
+
+    if (state !== 'sleeping') {
+      leftWing.rotation.z = 0.35 + Math.sin(t * 2.5) * 0.1 + wingFlap;
+      rightWing.rotation.z = -0.35 - Math.sin(t * 2.5) * 0.1 - wingFlap;
+    }
+
+    var bodyTargetY = mouseX * 0.12;
+    penguin.rotation.y += (bodyTargetY - penguin.rotation.y) * 2 * dt;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  if (bridge && bridge.onReady) { bridge.onReady(); }
+  console.log('guga 3D penguin ready');
+}
+</script>
+</body>
+</html>

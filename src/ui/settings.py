@@ -264,6 +264,18 @@ class SettingsDialog(QDialog):
             self._float_pos_combo.setCurrentText(current_pos)
         fform.addRow("Position:", self._float_pos_combo)
 
+        self._float_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self._float_size_slider.setRange(40, 200)
+        self._float_size_slider.setValue(self._config.get("ui", "floating", "size", default=80))
+        self._float_size_label = QLabel(f"{self._float_size_slider.value()}px")
+        self._float_size_slider.valueChanged.connect(
+            lambda v: self._float_size_label.setText(f"{v}px")
+        )
+        row3 = QHBoxLayout()
+        row3.addWidget(self._float_size_slider)
+        row3.addWidget(self._float_size_label)
+        fform.addRow("Size:", row3)
+
         layout.addWidget(float_group)
         layout.addStretch()
         return w
@@ -315,6 +327,7 @@ class SettingsDialog(QDialog):
         self._config.set("ui", "floating", "enabled", value=self._float_enabled_check.isChecked())
         self._config.set("ui", "floating", "opacity", value=self._float_opacity_slider.value() / 100.0)
         self._config.set("ui", "floating", "position", value=self._float_pos_combo.currentText())
+        self._config.set("ui", "floating", "size", value=self._float_size_slider.value())
 
         self.settings_applied.emit()
         self.accept()

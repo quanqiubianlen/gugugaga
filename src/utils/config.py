@@ -29,7 +29,7 @@ class Config(QObject):
             "theme": "dark",
             "font_size": 13,
             "window": {"width": 800, "height": 600, "title": "Desktop Agent", "opacity": 1.0},
-            "floating": {"enabled": True, "size": 56, "opacity": 0.85, "position": "top-right"},
+            "floating": {"enabled": True, "size": 80, "opacity": 0.85, "position": "top-right"},
         },
         "features": {
             "hotkeys": {

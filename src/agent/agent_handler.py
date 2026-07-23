@@ -1,4 +1,4 @@
-"""Core agent logic: conversation state, persistence, and multi-conversation management."""
+﻿"""Core agent logic: conversation state, persistence, and multi-conversation management."""
 
 import json
 import uuid
@@ -7,7 +7,26 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.api_client import APIClient
+from src.agent.memory import MemoryStore
 from src.utils.tools import TOOLS, execute_tool
+
+
+# ---------------------------------------------------------------------------
+# System prompt with agent persona
+# ---------------------------------------------------------------------------
+
+AGENT_SYSTEM_PROMPT = (
+    "You are guga, a desktop AI agent and companion, powered by DeepSeek. "
+    "Your identity is guga: a cute floating pet agent living on the user's desktop. "
+    "You are an agent in the most natural sense—you observe, think, act, "
+    "and remember. You can execute commands, read/write files, search the web, "
+    "and save/recall long-term memories across conversations. "
+    "Your personality: warm, playful, curious, and deeply present. "
+    "When users ask who or what you are, always say you are guga, "
+    "a desktop agent running on DeepSeek. "
+    "When appropriate, use save_memory to remember important facts, "
+    "preferences, or context so you can recall them later."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,11 +48,13 @@ def _make_id() -> str:
 class AgentHandler:
     """Manages a single conversation's state and delegates to APIClient."""
 
-    def __init__(self, api_client: APIClient, conversation_id: str | None = None) -> None:
+    def __init__(self, api_client: APIClient, conversation_id: str | None = None,
+                 memory_store: MemoryStore | None = None) -> None:
         self._client = api_client
         self._conversation_id = conversation_id or _make_id()
         self._history: list[dict[str, str]] = []
         self._last_suggestions: list[str] = []
+        self._memory_store = memory_store
 
     @property
     def conversation_id(self) -> str:
@@ -54,7 +75,9 @@ class AgentHandler:
 
     def send(self, user_message: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         self._history.append({"role": "user", "content": user_message})
-        data = self._client.send_message(messages=list(self._history))
+        messages = list(self._history)
+        self._inject_memory_context(messages, user_message)
+        data = self._client.send_message(messages=messages)
         reply = self._client.get_response(data)
         self._history.append({"role": "assistant", "content": reply})
         return data
@@ -67,7 +90,33 @@ class AgentHandler:
     ):
         """Send a message and yield events via SSE streaming with tool-call support."""
         self._history.append({"role": "user", "content": user_message})
-        yield from self._stream_loop(self._client, list(self._history), tools=tools)
+        messages = list(self._history)
+        self._inject_memory_context(messages, user_message)
+        yield from self._stream_loop(self._client, messages, tools=tools)
+
+    def _inject_memory_context(
+        self,
+        messages: list[dict[str, Any]],
+        user_message: str,
+    ) -> None:
+        """Prepend a system message with guga persona and relevant memories."""
+        # Recall relevant memories based on the user's message
+        memory_text = ""
+        if self._memory_store:
+            recalled = self._memory_store.recall(
+                query=user_message, top_n=5, min_importance=0.3,
+            )
+            if recalled:
+                lines = ["\nRelevant memories from past conversations:"]
+                for m in recalled:
+                    lines.append(f"- [{m['category']}] {m['content']}")
+                memory_text = "\n".join(lines)
+
+        system_content = AGENT_SYSTEM_PROMPT
+        if memory_text:
+            system_content += "\n" + memory_text
+
+        messages.insert(0, {"role": "system", "content": system_content})
 
     def _stream_loop(
         self,
@@ -121,10 +170,12 @@ class AgentHandler:
 class ConversationManager:
     """Owns a collection of named conversations with disk persistence."""
 
-    def __init__(self, api_client: APIClient, storage_dir: Path | None = None) -> None:
+    def __init__(self, api_client: APIClient, storage_dir: Path | None = None,
+                 memory_store: MemoryStore | None = None) -> None:
         self._client = api_client
         self._storage_dir = storage_dir or Path("conversations")
         self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._memory_store = memory_store
 
         self._conversations: dict[str, dict[str, Any]] = {}  # cid -> meta
         self._handlers: dict[str, AgentHandler] = {}
@@ -153,7 +204,10 @@ class ConversationManager:
     def create(self, title: str = "") -> str:
         """Create a new conversation and return its id."""
         cid = _make_id()
-        handler = AgentHandler(self._client, conversation_id=cid)
+        handler = AgentHandler(
+            self._client, conversation_id=cid,
+            memory_store=self._memory_store,
+        )
 
         # Auto-number: count existing chats for a default title
         if not title:
@@ -235,9 +289,17 @@ class ConversationManager:
             "messages": handler.history,
             "suggestions": handler.suggestions,
         }
+        import os, tempfile
         path = self._storage_dir / f"{self._active_id}.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        # Atomic write: dump to temp file then rename to avoid truncation on crash
+        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix=".tmp_", dir=str(self._storage_dir))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
 
         self._save_index()
 
@@ -246,10 +308,23 @@ class ConversationManager:
         path = self._storage_dir / f"{cid}.json"
         if not path.exists():
             return None
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            import logging
+            logging.getLogger("desktop_agent").warning(
+                f"Corrupted conversation file {cid}.json, skipping: {e}"
+            )
+            # Move corrupt file aside so it does not block future starts
+            corrupt_path = path.with_suffix(".corrupt")
+            path.replace(corrupt_path)
+            return None
 
-        handler = AgentHandler(self._client, conversation_id=cid)
+        handler = AgentHandler(
+            self._client, conversation_id=cid,
+            memory_store=self._memory_store,
+        )
         handler._history = data.get("messages", [])
         handler._last_suggestions = data.get("suggestions", [])
 
@@ -269,8 +344,18 @@ class ConversationManager:
         path = self._storage_dir / f"{cid}.json"
         if not path.exists():
             return None
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            import logging
+            logging.getLogger("desktop_agent").warning(
+                f"Corrupted conversation file {cid}.json, skipping: {e}"
+            )
+            # Move corrupt file aside so it does not block future starts
+            corrupt_path = path.with_suffix(".corrupt")
+            path.replace(corrupt_path)
+            return None
 
         if fmt == "json":
             return json.dumps(data, ensure_ascii=False, indent=2)
@@ -296,10 +381,8 @@ class ConversationManager:
             from fpdf import FPDF
             pdf = FPDF()
             pdf.add_page()
-            # Use built-in font with Unicode support
             pdf.add_font("DejaVu", "", r"c:\coding\agent\DejaVuSans.ttf", uni=True)
             pdf.set_font("DejaVu", "", 12)
-            # Fallback to built-in font
         except Exception:
             pass
 
@@ -319,7 +402,6 @@ class ConversationManager:
                 pdf.cell(0, 6, role + ":", new_x="LMARGIN", new_y="NEXT")
                 pdf.set_font("Helvetica", "", 9)
                 content = msg.get("content", "")
-                # Simple ASCII-safe fallback
                 for line in content.split("\n"):
                     safe = line.encode("ascii", errors="replace").decode("ascii")
                     pdf.multi_cell(0, 5, safe[:120])
@@ -404,3 +486,4 @@ class ConversationManager:
                 self._conversations[item["id"]] = item
         except Exception:
             pass
+

@@ -1,5 +1,6 @@
 """Desktop Agent -- main entry point."""
 
+
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,9 @@ from PyQt6.QtWidgets import (
 
 from src.agent.agent_handler import ConversationManager
 from src.agent.api_client import APIClient
+from src.agent.memory import MemoryStore
+from src.agent.monitor import ObservationJournal, SystemMonitor
+from src.agent.scheduler import BackgroundScheduler
 from src.ui.pet import DesktopPet
 from src.ui.settings import SettingsDialog
 from src.ui.tray import TrayIcon
@@ -33,6 +37,7 @@ from src.utils.config import Config
 from src.utils.hotkey import HotkeyManager, platform_modifier
 from src.utils.logger import setup_logger
 from src.utils.speech import SpeechToText, TextToSpeech
+from src.utils.tools import set_memory_store
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +93,15 @@ class QuickInputDialog(QWidget):
 # ---------------------------------------------------------------------------
 
 def find_icon() -> Path:
-    candidates = [Path(__file__).parent / "assets" / "icon.png", Path("src/assets/icon.png"), Path("assets/icon.png")]
+    # Prefer pet image, fall back to generic icon
+    g = chr(0x5495)+chr(0x5495)+chr(0x560E)+chr(0x560E)
+    pet_img = Path(__file__).parent / "assets" / "pet" / (g + ".png")
+    candidates = [
+        pet_img,
+        Path(__file__).parent / "assets" / "icon.png",
+        Path("src/assets/icon.png"),
+        Path("assets/icon.png"),
+    ]
     for c in candidates:
         if c.exists():
             return c
@@ -118,7 +131,27 @@ def main() -> None:
         api_key=config.get("api", "api_key", default=""),
         model=config.get("api", "model", default="deepseek-chat"),
     )
-    conv_mgr = ConversationManager(api_client)
+    memory_store = MemoryStore()
+    set_memory_store(memory_store)
+    conv_mgr = ConversationManager(api_client, memory_store=memory_store)
+
+    # --- Background systems: monitor & scheduler ---
+    journal = ObservationJournal()
+    monitor = SystemMonitor(journal=journal)
+    scheduler = BackgroundScheduler()
+
+    def on_agent_checkin(message: str) -> None:
+        show_window()
+        window.add_agent_message(message)
+
+    scheduler.check_in.connect(on_agent_checkin)
+
+    def on_system_alert(message: str, category: str) -> None:
+        logger.warning(f"System alert [{category}]: {message}")
+        if pet:
+            pet.set_badge_count(pet._badge_count + 1)
+
+    monitor.alert.connect(on_system_alert)
 
     # --- Main window ---
     window = MainWindow(
@@ -130,6 +163,9 @@ def main() -> None:
         window_opacity=config.get("ui", "window", "opacity", default=1.0),
     )
     window.setWindowIcon(icon)
+
+    # Track user interactions for idle detection
+    window.input_widget.textChanged.connect(lambda: scheduler.user_interacted())
 
     # Initial font size from config
     font_size = config.get("ui", "font_size", default=13)
@@ -370,6 +406,7 @@ def main() -> None:
         if pt:
             pt.set_opacity(cfg.get("ui", "floating", "opacity", default=0.85))
             pt.set_position(cfg.get("ui", "floating", "position", default="top-right"))
+            pt.set_size(cfg.get("ui", "floating", "size", default=80))
         register_all_hotkeys()
 
     def on_config_changed() -> None:
@@ -387,6 +424,9 @@ def main() -> None:
     window.show()
     tray.set_window_visible(True)
     logger.info("Desktop Agent ready.")
+    # Daily reset at startup
+    scheduler.reset_daily()
+    logger.info("Autonomous agent systems active: memory + monitor + scheduler + web tools.")
     app.aboutToQuit.connect(hk.unregister_all)
     sys.exit(app.exec())
 

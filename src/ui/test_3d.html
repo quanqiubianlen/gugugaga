@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head><style>body{margin:0;background:#333;}canvas{display:block;}</style></head>
+<body>
+<script src="three.min.js"></script>
+<script>
+try {
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 10);
+  camera.position.z = 5;
+  var renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setSize(200, 200);
+  renderer.setClearColor(0xff0000);  // RED
+  document.body.appendChild(renderer.domElement);
+
+  var geo = new THREE.BoxGeometry(2, 2, 2);
+  var mat = new THREE.MeshBasicMaterial({color: 0x00ff00});  // GREEN
+  var cube = new THREE.Mesh(geo, mat);
+  scene.add(cube);
+
+  function anim() {
+    requestAnimationFrame(anim);
+    cube.rotation.x += 0.01;
+    cube.rotation.y += 0.01;
+    renderer.render(scene, camera);
+  }
+  anim();
+  document.title = "OK";
+} catch(e) {
+  document.title = "ERR:" + e.message;
+}
+</script>
+</body>
+</html>
