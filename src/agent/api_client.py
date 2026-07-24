@@ -250,3 +250,36 @@ class APIClient:
         msg = f"Request failed after {self.MAX_RETRIES} attempts"
         self._last_error_message = msg
         raise APIClientError(msg)
+
+
+class VisionClient:
+    def __init__(self, base_url, api_key, model, timeout=60):
+        self.base_url = base_url.rstrip('/')
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+
+    @property
+    def enabled(self):
+        return bool(self.api_key and self.base_url)
+
+    def describe(self, base64_data, prompt=''):
+        if not self.enabled:
+            return None
+        import requests
+        text = prompt or 'Describe this screenshot in detail. What apps, windows, code, text, or content do you see?'
+        try:
+            r = requests.post(
+                self.base_url + '/chat/completions',
+                headers={'Authorization': 'Bearer ' + self.api_key, 'Content-Type': 'application/json'},
+                json={'model': self.model, 'messages': [{'role': 'user', 'content': [
+                    {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64_data}},
+                    {'type': 'text', 'text': text},
+                ]}], 'max_tokens': 1024},
+                timeout=self.timeout,
+            )
+            if r.status_code != 200:
+                return None
+            return r.json()['choices'][0]['message']['content']
+        except Exception:
+            return None

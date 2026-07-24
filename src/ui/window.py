@@ -1,4 +1,4 @@
-"""Chat window with message bubbles, Markdown, code highlighting, suggestions, error handling, and conversation sidebar."""
+﻿"""Chat window with message bubbles, Markdown, code highlighting, suggestions, error handling, and conversation sidebar."""
 
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +7,7 @@ from PyQt6.QtCore import (
     QEasingCurve, QElapsedTimer, QPropertyAnimation, Qt, QThread, QTimer, pyqtSignal,
 )
 from PyQt6.QtGui import QAction, QCloseEvent, QFont, QFontMetrics, QKeyEvent, QPainter, QPainterPath, QPixmap, QResizeEvent
+from src.agent.api_client import VisionClient
 from src.utils.tools import TOOLS
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -59,7 +60,18 @@ def _build_code_css() -> str:
 # Markdown -> HTML
 # ---------------------------------------------------------------------------
 
+def _m2t(content):
+    if isinstance(content, str): return content
+    if isinstance(content, list):
+        p=[]
+        for x in content:
+            if isinstance(x,dict) and x.get('type')=='text': p.append(x.get('text',''))
+            elif isinstance(x,dict) and x.get('type')=='image_url': p.append('[Image]')
+        return ' '.join(p) or '[Attachment]'
+    return str(content)
+
 def _render_markdown(text: str) -> str:
+    text = _m2t(text)
     if not text:
         return ""
     css = _build_code_css()
@@ -432,9 +444,10 @@ class MainWindow(QMainWindow):
     file_attached = pyqtSignal(str)
     font_size_changed = pyqtSignal(int)
 
-    def __init__(self, conv_manager, title="Desktop Agent", width=900, height=600,
+    def __init__(self, conv_manager, vision_client: VisionClient | None = None, title="Desktop Agent", width=900, height=600,
                  theme="dark", window_opacity=1.0) -> None:
         super().__init__()
+        self._vision = vision_client
         self._popup_mode = False
         self._show_ts = 0
         self._conv = conv_manager
@@ -596,6 +609,13 @@ class MainWindow(QMainWindow):
         send_btn.clicked.connect(self._on_send)
         input_layout.addWidget(send_btn)
 
+        # Attachment indicator
+        self._att_label = QPushButton("")
+        self._att_label.setStyleSheet("QPushButton { background: #313244; color: #f9e2af; border: 1px solid #f9e2af; border-radius: 6px; padding: 4px 10px; font-size: 11px; text-align: left; } QPushButton:hover { background: #45475a; }")
+        self._att_label.setVisible(False)
+        self._att_label.clicked.connect(self._clear_attachments)
+        chat_layout.addWidget(self._att_label)
+
         chat_layout.addWidget(self._scroll)
         chat_layout.addWidget(input_panel)
         splitter.addWidget(chat_widget)
@@ -610,6 +630,7 @@ class MainWindow(QMainWindow):
         
         self._typing: TypingIndicator | None = None
         self._worker: ApiWorker | None = None
+        self._attachments: list = []
         self._last_message: str = ""  # for retry
         self._stream_first_token = False
         self._at_bottom = True
@@ -658,11 +679,18 @@ class MainWindow(QMainWindow):
 
     def _on_send(self, retry_text: str | None = None) -> None:
         text = retry_text or self._input.text().strip()
-        if not text:
+        if not text and not self._attachments:
             return
         self._input.clear()
         self._last_message = text
-        self.add_user_message(text)
+        display = text or ""
+        if self._attachments:
+            parts = []
+            for a in self._attachments:
+                if a["type"] == "image": parts.append("[Screenshot]")
+                elif a["type"] == "file": parts.append("[File: " + a.get("name", "?") + "]")
+            display = " ".join(parts) + " " + (text or "")
+        self.add_user_message(display)
         self.thinking_started.emit()
         self.api_call_started.emit()
 
@@ -677,6 +705,22 @@ class MainWindow(QMainWindow):
                 return
 
         self._start_streaming(text)
+
+    def add_screenshot(self, base64_data: str) -> None:
+        self._attachments.append({"type": "image", "data": base64_data})
+        self._att_label.setText("Attached: Screenshot")
+        self._att_label.setVisible(True)
+
+    def add_file(self, filepath: str, content: str) -> None:
+        import os
+        name = os.path.basename(filepath)
+        self._attachments.append({"type": "file", "name": name, "data": content})
+        self._att_label.setText("Attached: " + name)
+        self._att_label.setVisible(True)
+
+    def _clear_attachments(self) -> None:
+        self._attachments.clear()
+        self._att_label.setVisible(False)
 
     def _on_api_result(self, data: dict) -> None:
         self.hide_typing()
@@ -738,7 +782,31 @@ class MainWindow(QMainWindow):
             self._show_error("No active conversation.", "unknown")
             return
         self.hide_typing()
-        self._streaming_worker = StreamingApiWorker(handler, text, tools=TOOLS)
+        content = text
+        if self._attachments:
+            parts = []
+            has_img = any(a["type"] == "image" for a in self._attachments)
+            # Try vision model for screenshots
+            desc = None
+            if has_img and self._vision and self._vision.enabled:
+                for a in self._attachments:
+                    if a["type"] == "image":
+                        desc = self._vision.describe(a["data"], prompt=text or "Describe this screenshot in detail.")
+                        break
+            if desc:
+                parts.append({"type": "text", "text": (text or "") + "\n\n[Screenshot description: " + desc + "]"})
+            else:
+                if text:
+                    parts.append({"type": "text", "text": text})
+            for a in self._attachments:
+                if a["type"] == "file":
+                    parts.append({"type": "text", "text": "[File: " + a.get("name", "?") + "]\n\n```\n" + a["data"] + "\n```"})
+                elif a["type"] == "image" and not desc:
+                    parts.append({"type": "text", "text": "[Screenshot captured]"})
+            if parts:
+                content = parts
+            self._clear_attachments()
+        self._streaming_worker = StreamingApiWorker(handler, content, tools=TOOLS)
         self._streaming_worker.token_received.connect(self._on_stream_token)
         self._streaming_worker.stream_finished.connect(self._on_stream_finished)
         self._streaming_worker.stream_error.connect(self._on_stream_error)
@@ -966,16 +1034,22 @@ class MainWindow(QMainWindow):
         self._clear_message_area()
 
     def _delete_conversation(self) -> None:
-        cid = self._conv.active_id
+        item = self._conv_list.currentItem()
+        if item is None:
+            return
+        cid = item.data(Qt.ItemDataRole.UserRole)
         if cid is None:
             return
         reply = QMessageBox.question(self, "Delete", "Delete this conversation?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
+        was_active = (cid == self._conv.active_id)
         self._conv.delete(cid)
-        self._clear_message_area()
-        new_id = self._conv.ensure_active()
-        self._load_conversation_messages(new_id)
+        if was_active:
+            self._clear_message_area()
+            new_id = self._conv.ensure_active()
+            if new_id:
+                self._load_conversation_messages(new_id)
         self._refresh_sidebar()
 
     def _export_current(self) -> None:
@@ -1045,7 +1119,7 @@ class MainWindow(QMainWindow):
         for msg in handler.history:
             # Skip tool-call messages with no displayable content
             role = msg.get("role", "")
-            content = msg.get("content", "")
+            content = _m2t(msg.get("content", ""))
             if role == "tool":
                 continue
             if role == "assistant" and not content and msg.get("tool_calls"):

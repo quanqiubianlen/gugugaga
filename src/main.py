@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.agent.agent_handler import ConversationManager
-from src.agent.api_client import APIClient
+from src.agent.api_client import APIClient, VisionClient
 from src.agent.memory import MemoryStore
 from src.agent.monitor import ObservationJournal, SystemMonitor
 from src.agent.scheduler import BackgroundScheduler
@@ -133,6 +133,8 @@ def main() -> None:
     )
     memory_store = MemoryStore()
     set_memory_store(memory_store)
+    vc=config.get("vision",default={})
+    vision_client=VisionClient(vc.get("base_url",""),vc.get("api_key",""),vc.get("model","gpt-4o")) if vc.get("enabled",False) else None
     conv_mgr = ConversationManager(api_client, memory_store=memory_store)
 
     # --- Background systems: monitor & scheduler ---
@@ -156,6 +158,7 @@ def main() -> None:
     # --- Main window ---
     window = MainWindow(
         conv_manager=conv_mgr,
+        vision_client=vision_client,
         title=config.get("ui", "window", "title", default="Desktop Agent"),
         width=config.get("ui", "window", "width", default=900),
         height=config.get("ui", "window", "height", default=600),
@@ -321,9 +324,13 @@ def main() -> None:
             os.close(fd)
             pix.save(tmp, "PNG")
             show_window()
-            window.input_widget.setText("[Screenshot attached] ")
+            import base64
+            with open(tmp, "rb") as fb:
+                b64 = base64.b64encode(fb.read()).decode("ascii")
+            try: os.unlink(tmp)
+            except: pass
+            window.add_screenshot(b64)
             window.input_widget.setFocus()
-            # TODO: send image bytes to API when supported
 
     window.screenshot_requested.connect(on_screenshot)
 

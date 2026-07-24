@@ -76,7 +76,10 @@ class AgentHandler:
     def send(self, user_message: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         self._history.append({"role": "user", "content": user_message})
         messages = list(self._history)
-        self._inject_memory_context(messages, user_message)
+        q = user_message
+        if not isinstance(q, str):
+            q = " ".join(p.get("text","") for p in q if isinstance(p, dict) and p.get("type")=="text") or "[Attachment]"
+        self._inject_memory_context(messages, q)
         data = self._client.send_message(messages=messages)
         reply = self._client.get_response(data)
         self._history.append({"role": "assistant", "content": reply})
@@ -91,7 +94,10 @@ class AgentHandler:
         """Send a message and yield events via SSE streaming with tool-call support."""
         self._history.append({"role": "user", "content": user_message})
         messages = list(self._history)
-        self._inject_memory_context(messages, user_message)
+        q = user_message
+        if not isinstance(q, str):
+            q = " ".join(p.get("text","") for p in q if isinstance(p, dict) and p.get("type")=="text") or "[Attachment]"
+        self._inject_memory_context(messages, q)
         yield from self._stream_loop(self._client, messages, tools=tools)
 
     def _inject_memory_context(
@@ -235,9 +241,9 @@ class ConversationManager:
 
     def delete(self, cid: str) -> bool:
         """Remove a conversation from memory and disk."""
-        if cid not in self._handlers:
+        if cid not in self._handlers and cid not in self._conversations:
             return False
-        del self._handlers[cid]
+        self._handlers.pop(cid, None)
         self._conversations.pop(cid, None)
         # Remove on-disk file
         (self._storage_dir / f"{cid}.json").unlink(missing_ok=True)
