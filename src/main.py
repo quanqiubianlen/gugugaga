@@ -3,6 +3,14 @@
 
 import os
 import sys
+import subprocess
+import atexit
+import socket
+import threading
+import subprocess
+import atexit
+import socket
+import threading
 from pathlib import Path
 
 # Ensure the project root is on sys.path so 'src.*' imports work
@@ -255,6 +263,7 @@ def main() -> None:
         tray.set_status("idle")
         if pet:
             pet.set_state(DesktopPet.IDLE)
+        write_pet_state("idle")
         preview = reply[:120] + "..." if len(reply) > 120 else reply
 # Notifications disabled
 
@@ -262,6 +271,7 @@ def main() -> None:
         tray.set_status("error")
         if pet:
             pet.set_state(DesktopPet.IDLE)
+        write_pet_state("idle")
 # Error notifications disabled
         def _reset_error_state():
             tray.set_status("idle")
@@ -272,14 +282,14 @@ def main() -> None:
     window.api_call_started.connect(on_api_started)
 
     def on_thinking() -> None:
-        if pet:
-            pet.set_state(DesktopPet.THINKING)
+        if pet: pet.set_state(DesktopPet.THINKING)
+        write_pet_state("thinking")
 
     window.thinking_started.connect(on_thinking)
 
     def on_streaming_started() -> None:
-        if pet:
-            pet.set_state(DesktopPet.RESPONDING)
+        if pet: pet.set_state(DesktopPet.RESPONDING)
+        write_pet_state("responding")
 
     window.streaming_started.connect(on_streaming_started)
 
@@ -357,9 +367,55 @@ def main() -> None:
 
     tray.settings_requested.connect(open_settings)
 
+    # --- Pet state file for 3D VRM pet ---
+    pet_state_file = Path(__file__).resolve().parent.parent / "guga3dmodel" / "pet_state.txt"
+    def write_pet_state(state):
+        try: pet_state_file.write_text(state)
+        except: pass
+
+    pet3d_proc = None
+
+    # Launch 3D VRM pet as subprocess if enabled
+    if config.get("features", "mate_engine", default=False):
+        p3d = Path(__file__).resolve().parent.parent / "guga3dmodel" / "main.py"
+        if p3d.exists():
+            try:
+                pet3d_proc = subprocess.Popen([sys.executable, str(p3d)], cwd=str(p3d.parent),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logger.info("3D VRM desktop pet launched")
+            except Exception as e:
+                logger.warning(f"3D pet launch failed: {e}")
+
+    # UDP listener for 3D pet clicks
+    if pet3d_proc:
+        def udp_listen():
+            s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            s.bind(("127.0.0.1",19877))
+            s.settimeout(1)
+            while True:
+                try:
+                    data,addr=s.recvfrom(1024)
+                    if data==b"click":
+                        toggle_window()
+                        write_pet_state("dancing")
+                        import time
+                        time.sleep(0.1)
+                        # Wait 5s then back to idle
+                        QTimer.singleShot(5000,lambda:write_pet_state("idle"))
+                except socket.timeout:continue
+                except:break
+        t=threading.Thread(target=udp_listen,daemon=True)
+        t.start()
+        logger.info("UDP listener started for 3D pet")
+
+    # Old poll section removed - replaced by UDP
+    if False: pass  # old poll code removed
+
+
     # --- Floating button ---
     pet = None
-    if config.get("ui", "floating", "enabled", default=True):
+    if not pet3d_proc and config.get("ui", "floating", "enabled", default=True):
         float_size = config.get("ui", "floating", "size", default=56)
         float_opacity = config.get("ui", "floating", "opacity", default=0.85)
         float_pos = config.get("ui", "floating", "position", default="top-right")
@@ -430,6 +486,9 @@ def main() -> None:
 
     window.show()
     tray.set_window_visible(True)
+    write_pet_state("idle")
+    write_pet_state("idle")
+    write_pet_state("idle")
     logger.info("Desktop Agent ready.")
     # Daily reset at startup
     scheduler.reset_daily()

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>guga</title>
+<style>*{margin:0;padding:0}body{background:transparent;overflow:hidden}canvas{display:block}</style>
+</head><body>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const W=400,H=500;
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(35,W/H,0.1,100);
+camera.position.set(0,1,4);camera.lookAt(0,0.3,0);
+
+const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0,0);renderer.setSize(W,H);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff,2.5));
+const key=new THREE.DirectionalLight(0xffffff,4);key.position.set(2,4,5);scene.add(key);
+const fill=new THREE.DirectionalLight(0xccddff,2.5);fill.position.set(-2,2,-1);scene.add(fill);
+
+let modelGroup=new THREE.Group();scene.add(modelGroup);
+let boneMap={},clock=new THREE.Clock(),state='idle',danceStart=0;
+let mixer=null;
+
+const loader=new GLTFLoader();
+loader.load('/model.vrm',function(gltf){
+    console.log('Model loaded');
+    const model=gltf.scene;model.rotation.y=Math.PI;
+    const box=new THREE.Box3().setFromObject(model);
+    const c=box.getCenter(new THREE.Vector3());const s=box.getSize(new THREE.Vector3());
+    model.position.set(-c.x,-c.y+s.y*0.1,-c.z);
+    const sc=2.0/Math.max(s.y,0.1);model.scale.setScalar(sc);
+    modelGroup.add(model);
+
+    // Collect bones by name
+    model.traverse(o=>{if(o.isBone)boneMap[o.name]=o;});
+    console.log('Bones:',Object.keys(boneMap).length,Object.keys(boneMap).slice(0,5));
+
+    // Store rest poses
+    for(const [name,bone] of Object.entries(boneMap)){
+        bone.userData.restQuat=bone.quaternion.clone();
+    }
+
+    if(gltf.animations&&gltf.animations.length>0){
+        mixer=new THREE.AnimationMixer(gltf.scene);
+        console.log('Animations:',gltf.animations.map(a=>a.name));
+    }
+    document.title='guga READY';
+},p=>{if(p.total)document.title='guga '+Math.round(p.loaded/p.total*100)+'%'},
+e=>{console.error(e);document.title='guga ERR'});
+
+function setBoneQuat(name,rx,ry,rz){
+    const bone=boneMap[name];
+    if(!bone)return;
+    const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(rx,ry,rz,'XYZ'));
+    bone.quaternion.copy(bone.userData.restQuat).multiply(q);
+}
+
+function setBoneReset(name){
+    const bone=boneMap[name];
+    if(bone)bone.quaternion.copy(bone.userData.restQuat);
+}
+
+function danceBones(t,strength){
+    if(strength<0.001){
+        // Reset all bones
+        ['upper_arm.L','upper_arm.R','lower_arm.L','lower_arm.R',
+         'upper_leg.L','upper_leg.R','lower_leg.L','lower_leg.R'].forEach(setBoneReset);
+        return;
+    }
+    const sw=Math.sin(t*5)*0.8*strength;
+    const sw2=Math.sin(t*7+1)*0.4*strength;
+    const kk=Math.sin(t*4.5+1.5)*0.5*strength;
+    const kk2=Math.sin(t*6)*0.3*strength;
+
+    setBoneQuat('upper_arm.L',sw,sw2,0);
+    setBoneQuat('lower_arm.L',sw*0.6,0,0);
+    setBoneQuat('upper_arm.R',-sw,-sw2,0);
+    setBoneQuat('lower_arm.R',-sw*0.6,0,0);
+    setBoneQuat('upper_leg.L',kk,0,kk2);
+    setBoneQuat('lower_leg.L',kk*0.6,0,0);
+    setBoneQuat('upper_leg.R',-kk,0,-kk2);
+    setBoneQuat('lower_leg.R',-kk*0.6,0,0);
+}
+
+document.addEventListener('click',function(e){
+    if(document.title.includes('READY')){
+        state='dancing';danceStart=performance.now()*0.001;
+    }
+});
+
+function animate(){
+    requestAnimationFrame(animate);
+    const dt=Math.min(clock.getDelta(),0.1);
+    const t=performance.now()*0.001;
+    if(mixer)mixer.update(dt);
+
+    // State management
+    if(state==='dancing'&&t-danceStart>5){state='idle';danceBones(0,0);}
+    const strength=state==='dancing'?Math.min(1,(t-danceStart)/0.5):0;
+    danceBones(t,strength);
+
+    // Body bob
+    if(state==='idle')modelGroup.position.y=Math.sin(t*2.5)*0.01;
+    else if(state==='dancing')modelGroup.position.y=Math.abs(Math.sin(t*8))*0.03;
+    else modelGroup.position.y=0;
+
+    renderer.render(scene,camera);
+}
+animate();
+</script></body></html>

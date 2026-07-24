@@ -1,0 +1,2 @@
+VRM模型可以用MateEngine加载成桌宠，MateEngine在GitHub上有
+模型目前还没有做物理，BLENDER最好用最新版本
